@@ -1,5 +1,14 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, Message, ContentType
+from calendar import c
+from email import message
+from urllib import response
+import aiogram
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ContentType
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram import Bot, Dispatcher, types, executor
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
+import logging
 import json
 import time
 import requests
@@ -8,55 +17,18 @@ conf = open('config.json')
 data = json.load(conf)
 
 API_KEY = data["MODEL"]
-users = 0
-# supported = [
-#     ".8svx",
-#     ".3ga",
-#     ".aac",
-#     ".ac3",
-#     ".aif",
-#     ".aiff",
-#     ".alac",
-#     ".amr",
-#     ".ape",
-#     ".au",
-#     ".dss",
-#     ".flac",
-#     ".flv",
-#     ".m4a",
-#     ".m4b",
-#     ".m4p",
-#     ".m4r",
-#     ".mp3",
-#     ".mpga",
-#     ".ogg",
-#     ".oga",
-#     ".mogg",
-#     ".opus",
-#     ".qcp",
-#     ".tta",
-#     ".voc",
-#     ".wav",
-#     ".wma",
-#     ".wv",
-#     ".webm",
-#     ".MTS",
-#     ".M2TS",
-#     ".TS",
-#     ".mov",
-#     ".mp2",
-#     ".mp4",
-#     ".m4v",
-#     ".mxf"
-# ]
+API_TOKEN = data["BOT"]
+
+BTN_Youtube = InlineKeyboardButton('YouTube', callback_data='youtube')
+BTN_Ted = InlineKeyboardButton('Ted', callback_data='ted')
+Standard = InlineKeyboardMarkup().add(BTN_Youtube, BTN_Ted)
 
 
 def start(path):
-    users += 1
     print("Okay I started")
     endpoint = "https://api.assemblyai.com/v2/transcript"
     json = {
-        "audio_url": f"https://api.telegram.org/file/bot5660455796:AAHQLbAfqcuLrssEyFsdAEr2T9XNKzBGww4/{path}",
+        "audio_url": f"https://api.telegram.org/file/bot{API_TOKEN}/{path}",
         "auto_chapters": True,
         "speaker_labels": True,
         "language_detection": True
@@ -73,7 +45,7 @@ def start(path):
 def get_response(id):
     endpoint = f"https://api.assemblyai.com/v2/transcript/{id}"
     headers = {
-        "authorization": "91ef75a473094a1da1547257782ee49d",
+        "authorization": API_KEY,
     }
     response = requests.get(endpoint, headers=headers)
     paragraphs = requests.get(f'{endpoint}/paragraphs', headers=headers)
@@ -94,35 +66,94 @@ def polling(id):
         return {}
 
 
-API_TOKEN = data["BOT"]
+def generate_message(results):
+    tempRes = {
+        'chapters': [],
+        'paras': [],
+    }
+    msg = '<b>Содержание:</b>\n\n'
+    i = 0
+    for item in results['chapters']:
+        sStart = item['start'] / 1000
+        mStart = 0
+        if sStart > 60:
+            mStart = sStart // 60
+            sStart -= mStart * 60
+        sEnd = item['end'] / 1000
+        mEnd = 0
+        if sEnd > 60:
+            mEnd = sEnd // 60
+            sEnd -= mEnd * 60
+        msg += f"{mStart}:{sStart} --- {mEnd}:{sEnd}\nHeadline: \"{item['headline']}\"\n\nGist: \"{item['gist']}\"\n\nSummary: \"{item['summary']}\"\n\n"
+        i += 1
+        if i % 3 == 0:
+            tempRes['chapters'].append(msg)
+            msg = ''
+    if len(msg) > 0:
+        tempRes['chapters'].append(msg)
+        msg = ''
+    msg = '\n<b>Параграфы:</b>\n\n'
+    i = 0
+    for item in results['paras']:
+        sStart = item['start'] / 1000
+        mStart = 0
+        if sStart > 60:
+            mStart = sStart // 60
+            sStart -= mStart * 60
+        sEnd = item['end'] / 1000
+        mEnd = 0
+        if sEnd > 60:
+            mEnd = sEnd // 60
+            sEnd -= mEnd * 60
+        msg += f"{mStart}:{sStart} --- {mEnd}:{sEnd}\n: \"{item['text']}\"\n\n"
+        i += 1
+        if i % 3 == 0:
+            tempRes['paras'].append(msg)
+            msg = ''
+    if len(msg) > 0:
+        tempRes['paras'].append(msg)
+        msg = ''
+    return tempRes
+
+
+def checklink(url):
+    response = requests.get(url)
+    if response.status_code == 200:
+        return "Good"
+    return 'BadLink'
+
+
+def download_yt():
+    pass
+
+
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
-kb_menu = ReplyKeyboardMarkup(
-    keyboard=[
-        [
-            KeyboardButton(text="Загрузить аудио"),
-            KeyboardButton(text="Загрузить видео"),
-        ],
-        [
-            KeyboardButton(text="Voice message"),
-            KeyboardButton(text="Video message"),
-        ],
-        [
-            KeyboardButton(text="Youtube url"),
-        ],
-    ]
-)
+dp = Dispatcher(bot, storage=MemoryStorage())
+dp.middleware.setup(LoggingMiddleware())
+
+logging.basicConfig(level=logging.INFO)
 
 
-@dp.message_handler(text='/help')
+class UserForm(StatesGroup):
+    name = State()  # Will be represented in storage as 'Form:name'
+    url = State()
+
+
+@dp.message_handler(commands=['help', 'start'])
 async def bot_start(message: Message):
-    await bot.send_message(chat_id=message.chat.id, text="Хай! Этот бот поможет получить текст аудио/видео, разбивая его по параграфам, таймстампам и разным спикерам (если их несколько)\n\n Важно понимать, что бот работает на базе ИИ, поэтому возможны неточности. На данный момент есть поддержка только данных языков: English, Spanish, French, German, Italian, Portugese, Dutch, Hindi, Japanese. Русского и казахского нет :(\n\n Для того чтобы получить транскрипт, ты можешь записать аудио/видео сообщение, прикрепить файл, или ссылку на видео (поддерживаются не все сайты, тк не со всех сайтов можно автоматически скачивать видео. Поэтому, если получить транскрипт по ссылке не получается - попробуйте скачать видос в самом худшем качестве и закинуть сюда)\n\n Чтобы прикрепить ссылку, используйте команду /link 'ваша ссылка'")
+    await bot.send_message(chat_id=message.chat.id, text="Хай! Этот бот поможет получить текст аудио/видео, разбивая его по параграфам, таймстампам и разным спикерам (если их несколько)\n\n Важно понимать, что бот работает на базе ИИ, поэтому возможны неточности. На данный момент есть поддержка только данных языков: English, Spanish, French, German, Italian, Portugese, Dutch, Hindi, Japanese. Русского и казахского нет :(\n\n Для того чтобы получить транскрипт, ты можешь записать аудио/видео сообщение, прикрепить файл, или ссылку на видео (поддерживаются не все сайты, тк не со всех сайтов можно автоматически скачивать видео. Поэтому, если получить транскрипт по ссылке не получается - попробуйте скачать видос в самом худшем качестве и закинуть сюда)\n\n ")  # Чтобы прикрепить ссылку, используйте команду /link 'ваша ссылка'
+
+
+@dp.message_handler(commands=['click'])
+async def cmd_start(message: types.Message, state: FSMContext):
+    async with state.proxy() as proxy:
+        proxy.setdefault('counter', 0)
+        proxy['counter'] += 1
+    return await message.reply(f"Counter: {proxy['counter']}")
 
 
 @dp.message_handler(content_types=[ContentType.VOICE, ContentType.AUDIO, ContentType.DOCUMENT, ContentType.VIDEO, ContentType.VIDEO_NOTE])
 async def handle_media(message: Message):
-    bot.send_message(chat_id=1257923806,
-                     text=f'Еще один написал. Теперь у тебя {users} юзеров')
     content = message.content_type
     await bot.send_message(chat_id=message.chat.id, text=f'You sent {content}')
     if (content == "document"):
@@ -148,52 +179,95 @@ async def handle_media(message: Message):
         await bot.send_message(chat_id=message.chat.id, text=f'Waiting for the audio to be transcribed...')
         time.sleep(5)
         results = polling(id)
-    msg = 'Содержание:\n\n'
-    i = 0
-    for item in results['chapters']:
-        sStart = item['start'] / 1000
-        mStart = 0
-        if sStart > 60:
-            mStart = sStart // 60
-            sStart -= mStart * 60
-        sEnd = item['end'] / 1000
-        mEnd = 0
-        if sEnd > 60:
-            mEnd = sEnd // 60
-            sEnd -= mEnd * 60
-        msg += f"{mStart}:{sStart} --- {mEnd}:{sEnd}\nHeadline: \"{item['headline']}\"\n\nGist: \"{item['gist']}\"\n\nSummary: \"{item['summary']}\"\n\n"
-        i += 1
-        if i % 3 == 0:
-            await bot.send_message(chat_id=message.chat.id, text=msg)
-            msg = ''
-    if len(msg) > 0:
+    ans = generate_message(results)
+    for msg in ans['chapters']:
         await bot.send_message(chat_id=message.chat.id, text=msg)
-    msg = '\nПараграфы:\n\n'
-    i = 0
-    for item in results['paras']:
-        sStart = item['start'] / 1000
-        mStart = 0
-        if sStart > 60:
-            mStart = sStart // 60
-            sStart -= mStart * 60
-        sEnd = item['end'] / 1000
-        mEnd = 0
-        if sEnd > 60:
-            mEnd = sEnd // 60
-            sEnd -= mEnd * 60
-        msg += f"{mStart}:{sStart} --- {mEnd}:{sEnd}\n: \"{item['text']}\"\n\n"
-        i += 1
-        if i % 3 == 0:
-            await bot.send_message(chat_id=message.chat.id, text=msg)
-            msg = ''
-    if len(msg) > 0:
+    for msg in ans['paras']:
         await bot.send_message(chat_id=message.chat.id, text=msg)
+    # msg = 'Содержание:\n\n'
+    # i = 0
+    # for item in results['chapters']:
+    #     sStart = item['start'] / 1000
+    #     mStart = 0
+    #     if sStart > 60:
+    #         mStart = sStart // 60
+    #         sStart -= mStart * 60
+    #     sEnd = item['end'] / 1000
+    #     mEnd = 0
+    #     if sEnd > 60:
+    #         mEnd = sEnd // 60
+    #         sEnd -= mEnd * 60
+    #     msg += f"{mStart}:{sStart} --- {mEnd}:{sEnd}\nHeadline: \"{item['headline']}\"\n\nGist: \"{item['gist']}\"\n\nSummary: \"{item['summary']}\"\n\n"
+    #     i += 1
+    #     if i % 3 == 0:
+    #         await bot.send_message(chat_id=message.chat.id, text=msg)
+    #         msg = ''
+    # if len(msg) > 0:
+    #     await bot.send_message(chat_id=message.chat.id, text=msg)
+    # msg = '\nПараграфы:\n\n'
+    # i = 0
+    # for item in results['paras']:
+    #     sStart = item['start'] / 1000
+    #     mStart = 0
+    #     if sStart > 60:
+    #         mStart = sStart // 60
+    #         sStart -= mStart * 60
+    #     sEnd = item['end'] / 1000
+    #     mEnd = 0
+    #     if sEnd > 60:
+    #         mEnd = sEnd // 60
+    #         sEnd -= mEnd * 60
+    #     msg += f"{mStart}:{sStart} --- {mEnd}:{sEnd}\n: \"{item['text']}\"\n\n"
+    #     i += 1
+    #     if i % 3 == 0:
+    #         await bot.send_message(chat_id=message.chat.id, text=msg)
+    #         msg = ''
+    # if len(msg) > 0:
+    #     await bot.send_message(chat_id=message.chat.id, text=msg)
     print("Done")
 
 
-@dp.message_handler(content_types=ContentType.TEXT)
-async def get_message(message: Message):
-    await bot.send_message(chat_id=message.chat.id, text=f"Айо восап напиши /help")
+@dp.callback_query_handler(text='youtube')
+async def process_callback_weather(callback_query: types.CallbackQuery, state: FSMContext):
+    # state = dp.current_state(user=callback_query.from_user.id)
+    # await state.set_state(TestStates.all()[0, 'http.youtube.com tuda suda'])
+    await bot.answer_callback_query(callback_query.id)
+    await bot.send_message(callback_query.from_user.id, text="Ютуб дисн гой")
+    async with state.proxy() as proxy:
+        await bot.send_message(chat_id=callback_query.from_user.id, text=f'{proxy["name"]} хочет видос по ссылке {proxy["url"]}')
+
+
+@dp.callback_query_handler(text='ted')
+async def process_callback_weather(callback_query: types.CallbackQuery, state: FSMContext):
+    # state = dp.current_state(user=callback_query.from_user.id)
+    # await state.set_state(TestStates.all()[1, 'http.tedx tuda suda'])
+    await bot.answer_callback_query(callback_query.id)
+    await bot.send_message(callback_query.from_user.id, text="Тед ток дисн гой")
+    async with state.proxy() as proxy:
+        await bot.send_message(chat_id=callback_query.from_user.id, text=f'{proxy["name"]} хочет видос по ссылке {proxy["url"]}')
+
+
+@dp.message_handler(commands=['state'])
+async def showState(state: FSMContext):
+    async with state.proxy() as proxy:
+        await bot.send_message(chat_id=message.chat.id, text=f'Name: {proxy["name"]}\n url: {proxy["url"]}')
+
+
+@dp.message_handler(content_types=ContentType.ANY)
+async def get_message(message: Message, state: FSMContext):
+    if message['entities'] and message['entities'][0]['type'] == 'url':
+        await bot.send_message(chat_id=message.chat.id, text=f"You sent a link. Checking if it's valid")
+        r = checklink(message.text)
+        if r == 'BadLink':
+            await bot.send_message(chat_id=message.chat.id, text="Ссылка не открывается :(")
+        else:
+            async with state.proxy() as proxy:
+                proxy['name'] = message.from_user.full_name
+                proxy['url'] = message.text
+            await bot.send_message(chat_id=message.chat.id, text="Ссылка рабочая!")
+            await bot.send_message(chat_id=message.chat.id, text="С какого сайта видос? Я еще работаю над другими сервисами. Если сайта, которые тебе нужен нет, напиши мне в личку", reply_markup=Standard)
+    else:
+        await bot.send_message(chat_id=message.chat.id, text='айоу восап напиши /help')
     # await bot.send_message(chat_id=message.chat.id, text="Hi!\nI'm Transcriber-Summarizer-Timestamper-someCoolStuff-doing Bot!\nMade by Arys.\n\n Чтобы увидеть инструкции, введи команду /help")
 
 
