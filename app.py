@@ -5,17 +5,18 @@ from aiogram import Bot, Dispatcher, types, executor
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
 import logging
-import json
 import time
 import requests
 from pytube import YouTube, exceptions
 import os
 
-conf = open('config.json')
-data = json.load(conf)
+# conf = open('config.json')
+# data = json.load(conf)
 
-API_KEY = data["MODEL"]
-API_TOKEN = data["BOT"]
+# API_KEY = data["MODEL"]
+# API_TOKEN = data["BOT"]
+assert (API_KEY := os.environ.get('MODEL'))
+assert (API_TOKEN := os.environ.get('BOT'))
 
 BTN_Youtube = InlineKeyboardButton(text='YouTube', callback_data='youtube')
 BTN_Ted = InlineKeyboardButton(text='Ted', callback_data='ted')
@@ -84,7 +85,7 @@ def generate_message(results):
         if sEnd > 60:
             mEnd = sEnd // 60
             sEnd -= mEnd * 60
-        msg += f"{mStart}:{sStart} --- {mEnd}:{sEnd}\nHeadline: \"{item['headline']}\"\n\nGist: \"{item['gist']}\"\n\nSummary: \"{item['summary']}\"\n\n"
+        msg += f"<i>{round(mStart, 2)}:{round(sStart, 2)} --- {round(mEnd, 2)}:{round(sEnd, 2)}</i>\n<b>Headline</b>: \"{item['headline']}\"\n\n<b>Gist</b>: \"{item['gist']}\"\n\n<b>Summary</b>: \"{item['summary']}\"\n\n"
         i += 1
         if i % 3 == 0:
             tempRes['chapters'].append(msg)
@@ -105,7 +106,7 @@ def generate_message(results):
         if sEnd > 60:
             mEnd = sEnd // 60
             sEnd -= mEnd * 60
-        msg += f"{mStart}:{sStart} --- {mEnd}:{sEnd}\n: \"{item['text']}\"\n\n"
+        msg += f"<i>{round(mStart, 2)}:{round(sStart, 2)} --- {round(mEnd, 2)}:{round(sEnd, 2)}</i>\n: \"{item['text']}\"\n\n"
         i += 1
         if i % 3 == 0:
             tempRes['paras'].append(msg)
@@ -147,6 +148,7 @@ def download_yt(url):
         os.remove(filename)
         return response.json()["upload_url"]
 
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 dp.middleware.setup(LoggingMiddleware())
@@ -157,28 +159,31 @@ logging.basicConfig(level=logging.INFO)
 class UserForm(StatesGroup):
     name = State()  # Will be represented in storage as 'Form:name'
     url = State()
+    users = State()
+
+
+@dp.message_handler(commands='stats')
+async def bot_start(message: Message, state: FSMContext):
+    if (message.from_user.id == 1257923806):
+        async with state.proxy() as proxy:
+            proxy.setdefault('users', 0)
+            return await message.reply(f"Total amount of users so far: {proxy['users']}")
 
 
 @dp.message_handler(commands=['help', 'start'])
 async def bot_start(message: Message):
-    await bot.send_message(chat_id=message.chat.id, text="Хай! Этот бот поможет получить текст аудио/видео, разбивая его по параграфам, таймстампам и разным спикерам (если их несколько)\n\n Важно понимать, что бот работает на базе ИИ, поэтому возможны неточности. На данный момент есть поддержка только данных языков: English, Spanish, French, German, Italian, Portugese, Dutch, Hindi, Japanese. Русского и казахского нет :(\n\n Для того чтобы получить транскрипт, ты можешь записать аудио/видео сообщение, прикрепить файл, или ссылку на видео (поддерживаются не все сайты, тк не со всех сайтов можно автоматически скачивать видео. Поэтому, если получить транскрипт по ссылке не получается - попробуйте скачать видос в самом худшем качестве и закинуть сюда)\n\n ")  # Чтобы прикрепить ссылку, используйте команду /link 'ваша ссылка'
-
-
-@dp.message_handler(commands=['click'])
-async def cmd_start(message: types.Message, state: FSMContext):
-    async with state.proxy() as proxy:
-        proxy.setdefault('counter', 0)
-        proxy['counter'] += 1
-    return await message.reply(f"Counter: {proxy['counter']}")
+    await bot.send_message(chat_id=message.chat.id, text="Хай! Этот бот поможет получить текст аудио/видео, разбивая его по параграфам, таймстампам и извлекая headline, gist, summary речи\n\n Важно понимать, что бот работает на базе ИИ, поэтому возможны неточности. На данный момент есть поддержка только данных языков: English, Spanish, French, German, Italian, Portugese, Dutch, Hindi, Japanese. Русского и казахского нет :(\n\n Для того чтобы получить транскрипт, ты можешь записать аудио/видео сообщение, прикрепить файл, или ссылку на видео (поддерживаются не все сайты, тк не со всех сайтов можно автоматически скачивать видео. Поэтому, если получить транскрипт по ссылке не получается - попробуйте скачать видос в самом худшем качестве и закинуть сюда)\n\n ")  # Чтобы прикрепить ссылку, используйте команду /link 'ваша ссылка'
 
 
 @dp.message_handler(content_types=[ContentType.VOICE, ContentType.AUDIO, ContentType.DOCUMENT, ContentType.VIDEO, ContentType.VIDEO_NOTE])
-async def handle_media(message: Message):
+async def handle_media(message: Message, state: FSMContext):
+    async with state.proxy() as proxy:
+        proxy.setdefault('users', 0)
+        proxy['users'] += 1
     content = message.content_type
-    await bot.send_message(chat_id=message.chat.id, text=f'You sent {content}')
     if (content == "document"):
         if not (message[content]["mime_type"][:5] == 'audio' or message[content]["mime_type"][:5] == 'video'):
-            await bot.send_message(chat_id=message.chat.id, text="Сорян ты кажется приложил неверный файл, или такой формат не поддерживается")
+            await bot.send_message(chat_id=message.chat.id, text="Вы приложили неверный файл, или такой формат не поддерживается")
         else:
             file = await message.document.get_file()
     if content == 'voice':
@@ -191,17 +196,18 @@ async def handle_media(message: Message):
         file = await message.video_note.get_file()
     filepath = file.file_path
     id = start(filepath, 'tg')
-    await bot.send_message(chat_id=message.chat.id, text='Started uploading to the server')
+    await bot.send_message(chat_id=message.chat.id, text='Начинаю загрузку на сервер')
     results = polling(id)
+    await bot.send_message(chat_id=message.chat.id, text=f'Начал обработку медиа, это может занять некоторое время')
     while len(results) == 0:
-        await bot.send_message(chat_id=message.chat.id, text=f'Waiting for the audio to be transcribed...')
-        time.sleep(5)
+        await bot.send_message(chat_id=message.chat.id, text=f'Еще немного...')
+        time.sleep(10)
         results = polling(id)
     ans = generate_message(results)
     for msg in ans['chapters']:
-        await bot.send_message(chat_id=message.chat.id, text=msg)
+        await bot.send_message(chat_id=message.chat.id, text=msg, parse_mode=types.ParseMode.HTML)
     for msg in ans['paras']:
-        await bot.send_message(chat_id=message.chat.id, text=msg)
+        await bot.send_message(chat_id=message.chat.id, text=msg, parse_mode=types.ParseMode.HTML)
 
 
 @dp.callback_query_handler(text=['youtube', 'ted'])
@@ -212,35 +218,35 @@ async def process_callback_weather(callback_query: types.CallbackQuery, state: F
     await bot.answer_callback_query(callback_query.id)
     async with state.proxy() as proxy:
         if callback_query.data == 'youtube':
-            await bot.send_message(user, text="Скачиваю видео с YouTube")
-            print(f'{proxy["name"]} wants video from {proxy["url"]}')
+            await bot.send_message(user, text="Скачиваю медиа с YouTube")
             audio_url = download_yt(proxy["url"])
         if callback_query.data == 'ted':
-            await bot.send_message(user, text="Ted дисн гой. Еще нету")
-    # state = dp.current_state(user=callback_query.from_user.id)
-    # await state.set_state(TestStates.all()[0, 'http.youtube.com tuda suda'])
+            await bot.send_message(user, text="Еще работаю над этим. (возможно нет тк на сайте Тед есть свои транскрипты с таймкодами")
 
     if audio_url == 'error':
-        await bot.send_message(chat_id=user, text='Ошибка.')
+        await bot.send_message(chat_id=user, text='Произошла неизвестная ошибка')
     else:
         id = start(audio_url, 'yt')
-        await bot.send_message(chat_id=user, text='Started uploading to the server')
+        await bot.send_message(chat_id=user, text='Загружаю медиа на сервер')
         results = polling(id)
+        await bot.send_message(chat_id=user, text=f'Начал обработку медиа, это может занять некоторое время')
         while len(results) == 0:
-            await bot.send_message(chat_id=user, text=f'Waiting for the audio to be transcribed...')
-            time.sleep(5)
+            await bot.send_message(chat_id=user, text=f'Еще немного...')
+            time.sleep(10)
             results = polling(id)
         ans = generate_message(results)
         for msg in ans['chapters']:
-            await bot.send_message(chat_id=user, text=msg)
+            await bot.send_message(chat_id=user, text=msg, parse_mode=types.ParseMode.HTML)
         for msg in ans['paras']:
-            await bot.send_message(chat_id=user, text=msg)
+            await bot.send_message(chat_id=user, text=msg, parse_mode=types.ParseMode.HTML)
 
 
 @dp.message_handler(content_types=ContentType.ANY)
 async def get_message(message: Message, state: FSMContext):
     if message['entities'] and message['entities'][0]['type'] == 'url':
-        await bot.send_message(chat_id=message.chat.id, text=f"You sent a link. Checking if it's valid")
+        async with state.proxy() as proxy:
+            proxy.setdefault('users', 0)
+            proxy['users'] += 1
         r = checklink(message.text)
         if r == 'BadLink':
             await bot.send_message(chat_id=message.chat.id, text="Ссылка не открывается :(")
@@ -248,28 +254,9 @@ async def get_message(message: Message, state: FSMContext):
             async with state.proxy() as proxy:
                 proxy['name'] = message.from_user.full_name
                 proxy['url'] = message.text
-            await bot.send_message(chat_id=message.chat.id, text="Ссылка рабочая!")
-            await bot.send_message(chat_id=message.chat.id, text="С какого сайта видос? Я еще работаю над другими сервисами. Если сайта, которые тебе нужен нет, напиши мне в личку", reply_markup=Standard)
+            await bot.send_message(chat_id=message.chat.id, text="С какого это сайта? Я еще работаю над добавлением поддержики других сервисов. Если сайта, которые тебе нужен нет, напиши мне в личку", reply_markup=Standard)
     else:
-        await bot.send_message(chat_id=message.chat.id, text='айоу восап напиши /help')
-    # await bot.send_message(chat_id=message.chat.id, text="Hi!\nI'm Transcriber-Summarizer-Timestamper-someCoolStuff-doing Bot!\nMade by Arys.\n\n Чтобы увидеть инструкции, введи команду /help")
-
-
-# @dp.message_handler(content_types=ContentType.VOICE)
-# async def voice_msg(message: Message):
-#     print("okay let's go")
-#     file = await message.voice.get_file()
-#     filepath = file.file_path
-#     id = start(filepath)
-#     await bot.send_message(chat_id=message.chat.id, text='Started uploading to the server')
-#     results = polling(id)
-#     while len(results) == 0:
-#         print(":( sleep")
-#         await bot.send_message(chat_id=message.chat.id, text=f'Waiting for the audio to be transcribed...')
-#         time.sleep(5)
-#         results = polling(id)
-#     await bot.send_message(chat_id=message.chat.id, text=f'{results["transcript"]}')
-
+        await bot.send_message(chat_id=message.chat.id, text='Чтобы получить помощь, напиши /help')
 
 if __name__ == "__main__":
     executor.start_polling(dp)
